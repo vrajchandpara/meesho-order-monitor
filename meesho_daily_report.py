@@ -1,7 +1,6 @@
 from playwright.sync_api import sync_playwright
 import requests
 import json
-import re
 import os
 import sys
 
@@ -22,53 +21,13 @@ MEESHO_URL = (
     "exmqx/orders/pending"
 )
 
+API_URL = (
+    "https://supplier.meesho.com/"
+    "api/fulfillment/orders"
+)
 
-# =========================================================
-# CHECK TELEGRAM TOKEN
-# =========================================================
-
-if not BOT_TOKEN:
-    print("❌ TELEGRAM_BOT_TOKEN secret is missing.")
-    sys.exit(1)
-
-
-# =========================================================
-# CHECK SESSION
-# =========================================================
-
-if not os.path.exists(SESSION_FILE):
-    print("❌ meesho_session.json was not created.")
-    sys.exit(1)
-
-
-try:
-    with open(
-        SESSION_FILE,
-        "r",
-        encoding="utf-8"
-    ) as f:
-        json.load(f)
-
-    print("✅ Meesho session JSON is valid.")
-
-except Exception as error:
-
-    print("❌ Invalid Meesho session:")
-    print(error)
-
-    sys.exit(1)
-
-
-# =========================================================
-# ORDER COUNTS
-# =========================================================
-
-counts = {
-    "pending": 0,
-    "ready-to-ship": 0,
-    "shipped": 0,
-    "cancelled": 0
-}
+SUPPLIER_ID = 4779751
+IDENTIFIER = "exmqx"
 
 
 # =========================================================
@@ -81,6 +40,48 @@ STATUS_MAP = {
     4: "shipped",
     5: "cancelled"
 }
+
+
+counts = {
+    "pending": 0,
+    "ready-to-ship": 0,
+    "shipped": 0,
+    "cancelled": 0
+}
+
+
+# =========================================================
+# BASIC CHECKS
+# =========================================================
+
+if not BOT_TOKEN:
+    print("❌ TELEGRAM_BOT_TOKEN secret is missing.")
+    sys.exit(1)
+
+
+if not os.path.exists(SESSION_FILE):
+    print("❌ meesho_session.json was not created.")
+    sys.exit(1)
+
+
+try:
+
+    with open(
+        SESSION_FILE,
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        json.load(f)
+
+    print("✅ Meesho session JSON is valid.")
+
+except Exception as error:
+
+    print("❌ Invalid Meesho session:")
+    print(error)
+
+    sys.exit(1)
 
 
 # =========================================================
@@ -133,7 +134,7 @@ def send_telegram(message):
 def extract_count(data):
 
     if not isinstance(data, dict):
-        return None
+        return 0
 
 
     # ---------------------------------------------
@@ -150,15 +151,9 @@ def extract_count(data):
         )
 
         if value is not None:
-
             return int(value)
 
-    except (
-        TypeError,
-        ValueError,
-        AttributeError
-    ):
-
+    except Exception:
         pass
 
 
@@ -173,18 +168,13 @@ def extract_count(data):
         )
 
         if value is not None:
-
             return int(value)
 
-    except (
-        TypeError,
-        ValueError
-    ):
-
+    except Exception:
         pass
 
 
-    return None
+    return 0
 
 
 # =========================================================
@@ -202,16 +192,6 @@ with sync_playwright() as p:
             headless=True
         )
 
-    except Exception as error:
-
-        print("❌ Could not start Chromium:")
-        print(error)
-
-        sys.exit(1)
-
-
-    try:
-
         context = browser.new_context(
             storage_state=SESSION_FILE
         )
@@ -220,191 +200,10 @@ with sync_playwright() as p:
 
     except Exception as error:
 
-        print("❌ Could not create browser:")
+        print("❌ Could not start browser:")
         print(error)
 
-        browser.close()
         sys.exit(1)
-
-
-    # =====================================================
-    # MEESHO API RESPONSE HANDLER
-    # =====================================================
-
-    def handle_response(response):
-
-        try:
-
-            # Only Meesho orders API
-            if not response.url.endswith(
-                "/api/fulfillment/orders"
-            ):
-                return
-
-
-            # Only POST
-            if response.request.method != "POST":
-                return
-
-
-            payload = response.request.post_data
-
-
-            if not payload:
-                return
-
-
-            payload = payload.strip()
-
-
-            # ---------------------------------------------
-            # Parse request JSON safely
-            # ---------------------------------------------
-
-            try:
-
-                request_data = json.loads(
-                    payload
-                )
-
-            except json.JSONDecodeError:
-
-                print(
-                    "⚠️ Ignored non-JSON request."
-                )
-
-                return
-
-
-            if not isinstance(
-                request_data,
-                dict
-            ):
-                return
-
-
-            # ---------------------------------------------
-            # Get type
-            # ---------------------------------------------
-
-            order_type = request_data.get(
-                "type"
-            )
-
-
-            # ---------------------------------------------
-            # Get status
-            # ---------------------------------------------
-
-            status = request_data.get(
-                "status"
-            )
-
-
-            try:
-
-                status = int(status)
-
-            except (
-                TypeError,
-                ValueError
-            ):
-
-                status = None
-
-
-            # ---------------------------------------------
-            # Determine correct order category
-            # ---------------------------------------------
-
-            category = None
-
-
-            # Prefer explicit type
-            if order_type in counts:
-
-                category = order_type
-
-
-            # Otherwise use status
-            elif status in STATUS_MAP:
-
-                category = STATUS_MAP[
-                    status
-                ]
-
-
-            if category is None:
-                return
-
-
-            # ---------------------------------------------
-            # Read response JSON
-            # ---------------------------------------------
-
-            try:
-
-                data = response.json()
-
-            except Exception:
-
-                print(
-                    f"⚠️ Could not read "
-                    f"{category} response."
-                )
-
-                return
-
-
-            # ---------------------------------------------
-            # Extract count
-            # ---------------------------------------------
-
-            count = extract_count(
-                data
-            )
-
-
-            if count is None:
-
-                print(
-                    f"⚠️ No count found "
-                    f"for {category}."
-                )
-
-                return
-
-
-            # ---------------------------------------------
-            # Store count
-            # ---------------------------------------------
-
-            counts[category] = max(
-                counts[category],
-                count
-            )
-
-
-            print(
-                f"📦 {category}: {count} "
-                f"(status={status})"
-            )
-
-
-        except Exception as error:
-
-            print(
-                "⚠️ API response processing error:"
-            )
-
-            print(error)
-
-
-    # Attach listener BEFORE opening Meesho
-    page.on(
-        "response",
-        handle_response
-    )
 
 
     # =====================================================
@@ -421,6 +220,8 @@ with sync_playwright() as p:
             timeout=60000
         )
 
+        page.wait_for_timeout(7000)
+
     except Exception as error:
 
         print("❌ Could not open Meesho:")
@@ -428,11 +229,6 @@ with sync_playwright() as p:
 
         browser.close()
         sys.exit(1)
-
-
-    page.wait_for_timeout(
-        7000
-    )
 
 
     print()
@@ -450,7 +246,6 @@ with sync_playwright() as p:
 
     current_url = page.url.lower()
 
-
     if (
         "login" in current_url
         or "signin" in current_url
@@ -458,7 +253,7 @@ with sync_playwright() as p:
     ):
 
         print(
-            "❌ Meesho session expired."
+            "❌ Meesho session has expired."
         )
 
         browser.close()
@@ -471,86 +266,226 @@ with sync_playwright() as p:
 
 
     # =====================================================
-    # CHECK TABS
+    # DIRECT MEESHO API FUNCTION
     # =====================================================
 
-    tabs = [
-        "Pending",
-        "Ready to Ship",
-        "Shipped",
-        "Cancelled"
-    ]
+    def get_order_count(status):
 
+        order_type = STATUS_MAP[status]
 
-    print()
-    print(
-        "📊 Collecting Meesho order counts..."
-    )
-    print()
-
-
-    for tab_name in tabs:
-
+        print()
         print(
-            f"🔄 Checking {tab_name}..."
+            f"🔎 Requesting {order_type} "
+            f"(status={status})..."
         )
 
 
+        payload = {
+            "enable_hold": True,
+
+            "supplier_details": {
+                "id": SUPPLIER_ID,
+                "identifier": IDENTIFIER,
+                "name": "VIHAL FASHION STORE"
+            },
+
+            "cursor": None,
+
+            "limit": 50,
+
+            "status": status,
+
+            "type": order_type,
+
+            "identifier": IDENTIFIER,
+
+            "child_supplier_identifier": None,
+
+            "child_supplier_id": None
+        }
+
+
+        # -------------------------------------------------
+        # Run fetch INSIDE authenticated Meesho browser
+        # -------------------------------------------------
+
         try:
 
-            # ---------------------------------------------
-            # Find tab
-            # ---------------------------------------------
+            result = page.evaluate(
+                """
+                async ({url, payload}) => {
 
-            tab = page.get_by_role(
-                "tab",
-                name=re.compile(
-                    f"^{re.escape(tab_name)}",
-                    re.IGNORECASE
-                )
-            ).first
+                    const response = await fetch(
+                        url,
+                        {
+                            method: "POST",
 
+                            credentials: "include",
 
-            # ---------------------------------------------
-            # Click
-            # ---------------------------------------------
+                            headers: {
+                                "Accept":
+                                    "application/json, text/plain, */*",
 
-            tab.click(
-                timeout=15000
+                                "Content-Type":
+                                    "application/json",
+
+                                "Client-Type":
+                                    "d-web",
+
+                                "Client-Package-Version":
+                                    "1.0.4"
+                            },
+
+                            body: JSON.stringify(payload)
+                        }
+                    );
+
+                    const text = await response.text();
+
+                    return {
+                        status: response.status,
+                        text: text
+                    };
+                }
+                """,
+                {
+                    "url": API_URL,
+                    "payload": payload
+                }
             )
-
-
-            # ---------------------------------------------
-            # Give API time to respond
-            # ---------------------------------------------
-
-            page.wait_for_timeout(
-                5000
-            )
-
 
         except Exception as error:
 
             print(
-                f"⚠️ Could not click "
-                f"{tab_name}:"
+                f"❌ Browser API request failed "
+                f"for {order_type}:"
             )
 
             print(error)
 
+            return 0
+
+
+        http_status = result.get(
+            "status",
+            0
+        )
+
+        response_text = result.get(
+            "text",
+            ""
+        )
+
+
+        print(
+            f"HTTP Status: {http_status}"
+        )
+
+
+        # -------------------------------------------------
+        # HTTP error
+        # -------------------------------------------------
+
+        if http_status != 200:
+
+            print(
+                f"❌ Meesho rejected "
+                f"{order_type} request."
+            )
+
+            print(
+                response_text[:1000]
+            )
+
+            return 0
+
+
+        # -------------------------------------------------
+        # Parse response
+        # -------------------------------------------------
+
+        try:
+
+            data = json.loads(
+                response_text
+            )
+
+        except json.JSONDecodeError:
+
+            print(
+                f"❌ Meesho returned "
+                f"non-JSON for {order_type}."
+            )
+
+            print(
+                response_text[:500]
+            )
+
+            return 0
+
+
+        # -------------------------------------------------
+        # Extract count
+        # -------------------------------------------------
+
+        count = extract_count(
+            data
+        )
+
+
+        print(
+            f"📦 {order_type}: {count}"
+        )
+
+
+        # -------------------------------------------------
+        # Show useful debugging info
+        # -------------------------------------------------
+
+        if order_type == "cancelled":
+
+            print(
+                "🔍 Cancelled API response:"
+            )
+
+            print(
+                json.dumps(
+                    data,
+                    indent=2
+                )[:3000]
+            )
+
+
+        return count
+
 
     # =====================================================
-    # EXTRA WAIT
+    # REQUEST ALL FOUR STATUSES
     # =====================================================
 
     print()
     print(
-        "⏳ Waiting for final Meesho responses..."
+        "======================================"
     )
 
-    page.wait_for_timeout(
-        5000
+    print(
+        "   DIRECT MEESHO API CHECK"
     )
+
+    print(
+        "======================================"
+    )
+
+
+    for status, order_type in STATUS_MAP.items():
+
+        counts[order_type] = get_order_count(
+            status
+        )
+
+        page.wait_for_timeout(
+            1500
+        )
 
 
     # =====================================================
@@ -632,14 +567,21 @@ with sync_playwright() as p:
 
         print()
         print(
-            "✅ Report completed!"
+            "======================================"
+        )
+
+        print(
+            "✅ REPORT COMPLETED!"
+        )
+
+        print(
+            "======================================"
         )
 
     else:
 
-        print()
         print(
-            "❌ Report completed "
+            "\n❌ Report completed "
             "with Telegram error."
         )
 
