@@ -4,7 +4,6 @@ import json
 import re
 import os
 import sys
-import time
 
 
 # =========================================================
@@ -34,7 +33,7 @@ if not BOT_TOKEN:
 
 
 # =========================================================
-# CHECK SESSION FILE
+# CHECK SESSION
 # =========================================================
 
 if not os.path.exists(SESSION_FILE):
@@ -42,30 +41,21 @@ if not os.path.exists(SESSION_FILE):
     sys.exit(1)
 
 
-# =========================================================
-# VERIFY SESSION JSON
-# =========================================================
-
 try:
-
     with open(
         SESSION_FILE,
         "r",
         encoding="utf-8"
     ) as f:
-
-        session_data = json.load(f)
-
-    if not isinstance(session_data, dict):
-        print("❌ Meesho session file is invalid.")
-        sys.exit(1)
+        json.load(f)
 
     print("✅ Meesho session JSON is valid.")
 
 except Exception as error:
 
-    print("❌ Could not read Meesho session:")
+    print("❌ Invalid Meesho session:")
     print(error)
+
     sys.exit(1)
 
 
@@ -82,14 +72,14 @@ counts = {
 
 
 # =========================================================
-# RESPONSE TRACKING
+# STATUS MAPPING
 # =========================================================
 
-responses_received = {
-    "pending": False,
-    "ready-to-ship": False,
-    "shipped": False,
-    "cancelled": False
+STATUS_MAP = {
+    1: "pending",
+    3: "ready-to-ship",
+    4: "shipped",
+    5: "cancelled"
 }
 
 
@@ -137,7 +127,7 @@ def send_telegram(message):
 
 
 # =========================================================
-# EXTRACT COUNT FROM RESPONSE
+# EXTRACT COUNT
 # =========================================================
 
 def extract_count(data):
@@ -145,7 +135,11 @@ def extract_count(data):
     if not isinstance(data, dict):
         return None
 
-    # Preferred location
+
+    # ---------------------------------------------
+    # data.count
+    # ---------------------------------------------
+
     try:
 
         value = data.get(
@@ -156,21 +150,37 @@ def extract_count(data):
         )
 
         if value is not None:
+
             return int(value)
 
-    except (TypeError, ValueError, AttributeError):
+    except (
+        TypeError,
+        ValueError,
+        AttributeError
+    ):
+
         pass
 
 
-    # Alternative location
+    # ---------------------------------------------
+    # total_count
+    # ---------------------------------------------
+
     try:
 
-        value = data.get("total_count")
+        value = data.get(
+            "total_count"
+        )
 
         if value is not None:
+
             return int(value)
 
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError
+    ):
+
         pass
 
 
@@ -184,6 +194,7 @@ def extract_count(data):
 with sync_playwright() as p:
 
     print("🚀 Starting Chromium...")
+
 
     try:
 
@@ -209,7 +220,7 @@ with sync_playwright() as p:
 
     except Exception as error:
 
-        print("❌ Could not create browser context:")
+        print("❌ Could not create browser:")
         print(error)
 
         browser.close()
@@ -217,31 +228,27 @@ with sync_playwright() as p:
 
 
     # =====================================================
-    # CAPTURE MEESHO API RESPONSES
+    # MEESHO API RESPONSE HANDLER
     # =====================================================
 
     def handle_response(response):
 
-        # Only the Meesho orders API
-        if not response.url.endswith(
-            "/api/fulfillment/orders"
-        ):
-            return
-
-
-        # Only POST requests
-        if response.request.method != "POST":
-            return
-
-
         try:
+
+            # Only Meesho orders API
+            if not response.url.endswith(
+                "/api/fulfillment/orders"
+            ):
+                return
+
+
+            # Only POST
+            if response.request.method != "POST":
+                return
+
 
             payload = response.request.post_data
 
-
-            # -------------------------------------------------
-            # Some requests have no payload
-            # -------------------------------------------------
 
             if not payload:
                 return
@@ -250,20 +257,9 @@ with sync_playwright() as p:
             payload = payload.strip()
 
 
-            # -------------------------------------------------
-            # Ignore obviously non-JSON payloads
-            # -------------------------------------------------
-
-            if not (
-                payload.startswith("{")
-                or payload.startswith("[")
-            ):
-                return
-
-
-            # -------------------------------------------------
-            # Safely parse request JSON
-            # -------------------------------------------------
+            # ---------------------------------------------
+            # Parse request JSON safely
+            # ---------------------------------------------
 
             try:
 
@@ -274,7 +270,7 @@ with sync_playwright() as p:
             except json.JSONDecodeError:
 
                 print(
-                    "⚠️ Ignored invalid JSON request payload."
+                    "⚠️ Ignored non-JSON request."
                 )
 
                 return
@@ -287,22 +283,64 @@ with sync_playwright() as p:
                 return
 
 
-            # -------------------------------------------------
-            # Identify order type
-            # -------------------------------------------------
+            # ---------------------------------------------
+            # Get type
+            # ---------------------------------------------
 
             order_type = request_data.get(
                 "type"
             )
 
 
-            if order_type not in counts:
+            # ---------------------------------------------
+            # Get status
+            # ---------------------------------------------
+
+            status = request_data.get(
+                "status"
+            )
+
+
+            try:
+
+                status = int(status)
+
+            except (
+                TypeError,
+                ValueError
+            ):
+
+                status = None
+
+
+            # ---------------------------------------------
+            # Determine correct order category
+            # ---------------------------------------------
+
+            category = None
+
+
+            # Prefer explicit type
+            if order_type in counts:
+
+                category = order_type
+
+
+            # Otherwise use status
+            elif status in STATUS_MAP:
+
+                category = STATUS_MAP[
+                    status
+                ]
+
+
+            if category is None:
                 return
 
 
-            # -------------------------------------------------
-            # Read response JSON safely
-            # -------------------------------------------------
+            # ---------------------------------------------
+            # Read response JSON
+            # ---------------------------------------------
 
             try:
 
@@ -312,59 +350,57 @@ with sync_playwright() as p:
 
                 print(
                     f"⚠️ Could not read "
-                    f"{order_type} response as JSON."
+                    f"{category} response."
                 )
 
                 return
 
 
-            # -------------------------------------------------
+            # ---------------------------------------------
             # Extract count
-            # -------------------------------------------------
+            # ---------------------------------------------
 
-            count = extract_count(data)
+            count = extract_count(
+                data
+            )
 
 
             if count is None:
+
                 print(
-                    f"⚠️ No count found for "
-                    f"{order_type}."
+                    f"⚠️ No count found "
+                    f"for {category}."
                 )
 
                 return
 
 
-            # -------------------------------------------------
-            # Keep highest valid count
-            # -------------------------------------------------
+            # ---------------------------------------------
+            # Store count
+            # ---------------------------------------------
 
-            if count > counts[order_type]:
-
-                counts[order_type] = count
-
-
-            responses_received[
-                order_type
-            ] = True
+            counts[category] = max(
+                counts[category],
+                count
+            )
 
 
             print(
-                f"📦 {order_type}: {count}"
+                f"📦 {category}: {count} "
+                f"(status={status})"
             )
 
 
         except Exception as error:
 
-            # Never allow one unexpected Meesho
-            # request to crash the entire workflow.
-
             print(
-                "⚠️ Ignored unexpected response:"
+                "⚠️ API response processing error:"
             )
 
             print(error)
 
 
+    # Attach listener BEFORE opening Meesho
     page.on(
         "response",
         handle_response
@@ -394,14 +430,17 @@ with sync_playwright() as p:
         sys.exit(1)
 
 
-    # Give Meesho time to initialize
-    page.wait_for_timeout(7000)
+    page.wait_for_timeout(
+        7000
+    )
 
 
-    print("\nURL:")
+    print()
+    print("URL:")
     print(page.url)
 
-    print("\nTitle:")
+    print()
+    print("Title:")
     print(page.title())
 
 
@@ -411,6 +450,7 @@ with sync_playwright() as p:
 
     current_url = page.url.lower()
 
+
     if (
         "login" in current_url
         or "signin" in current_url
@@ -418,7 +458,7 @@ with sync_playwright() as p:
     ):
 
         print(
-            "❌ Meesho session is expired or invalid."
+            "❌ Meesho session expired."
         )
 
         browser.close()
@@ -431,7 +471,7 @@ with sync_playwright() as p:
 
 
     # =====================================================
-    # CHECK ORDER TABS
+    # CHECK TABS
     # =====================================================
 
     tabs = [
@@ -442,9 +482,11 @@ with sync_playwright() as p:
     ]
 
 
+    print()
     print(
-        "\n📊 Collecting Meesho order counts...\n"
+        "📊 Collecting Meesho order counts..."
     )
+    print()
 
 
     for tab_name in tabs:
@@ -457,31 +499,34 @@ with sync_playwright() as p:
         try:
 
             # ---------------------------------------------
-            # Find the tab
+            # Find tab
             # ---------------------------------------------
 
             tab = page.get_by_role(
                 "tab",
                 name=re.compile(
-                    f"^{re.escape(tab_name)}"
+                    f"^{re.escape(tab_name)}",
+                    re.IGNORECASE
                 )
-            )
+            ).first
 
 
             # ---------------------------------------------
-            # Click tab
+            # Click
             # ---------------------------------------------
 
-            tab.first.click(
+            tab.click(
                 timeout=15000
             )
 
 
             # ---------------------------------------------
-            # Wait for Meesho API request
+            # Give API time to respond
             # ---------------------------------------------
 
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(
+                5000
+            )
 
 
         except Exception as error:
@@ -498,15 +543,21 @@ with sync_playwright() as p:
     # EXTRA WAIT
     # =====================================================
 
-    # Allow final API responses to arrive.
-    page.wait_for_timeout(3000)
+    print()
+    print(
+        "⏳ Waiting for final Meesho responses..."
+    )
+
+    page.wait_for_timeout(
+        5000
+    )
 
 
     # =====================================================
     # SUMMARY
     # =====================================================
 
-    print("\n")
+    print()
     print(
         "======================================"
     )
@@ -545,29 +596,7 @@ with sync_playwright() as p:
 
 
     # =====================================================
-    # SHOW CAPTURE STATUS
-    # =====================================================
-
-    print("\n📡 API capture status:")
-
-    for order_type, received in responses_received.items():
-
-        if received:
-
-            print(
-                f"   ✅ {order_type}"
-            )
-
-        else:
-
-            print(
-                f"   ⚠️ {order_type} "
-                f"response not detected"
-            )
-
-
-    # =====================================================
-    # TELEGRAM MESSAGE
+    # TELEGRAM
     # =====================================================
 
     message = f"""📊 MEESHO ORDER UPDATE
@@ -581,8 +610,9 @@ with sync_playwright() as p:
 """
 
 
+    print()
     print(
-        "\n📱 Sending Telegram report..."
+        "📱 Sending Telegram report..."
     )
 
 
@@ -592,7 +622,7 @@ with sync_playwright() as p:
 
 
     # =====================================================
-    # CLOSE BROWSER
+    # CLOSE
     # =====================================================
 
     browser.close()
@@ -600,14 +630,16 @@ with sync_playwright() as p:
 
     if success:
 
+        print()
         print(
-            "\n✅ Report completed!"
+            "✅ Report completed!"
         )
 
     else:
 
+        print()
         print(
-            "\n❌ Report completed "
+            "❌ Report completed "
             "with Telegram error."
         )
 
