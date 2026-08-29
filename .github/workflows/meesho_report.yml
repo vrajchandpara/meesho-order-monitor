@@ -1,0 +1,119 @@
+name: Meesho Order Report
+
+on:
+
+  workflow_dispatch:
+
+  schedule:
+
+    # 09:00 AM IST
+    - cron: "30 3 * * *"
+
+    # 01:00 PM IST
+    - cron: "30 7 * * *"
+
+    # 06:00 PM IST
+    - cron: "30 12 * * *"
+
+    # 10:00 PM IST
+    - cron: "30 16 * * *"
+
+
+jobs:
+
+  meesho-report:
+
+    runs-on: ubuntu-latest
+
+
+    steps:
+
+      # -----------------------------------------
+      # Download repository
+      # -----------------------------------------
+
+      - name: Checkout repository
+
+        uses: actions/checkout@v4
+
+
+      # -----------------------------------------
+      # Install Python
+      # -----------------------------------------
+
+      - name: Setup Python
+
+        uses: actions/setup-python@v5
+
+        with:
+
+          python-version: "3.12"
+
+
+      # -----------------------------------------
+      # Install Python packages
+      # -----------------------------------------
+
+      - name: Install dependencies
+
+        run: |
+
+          python -m pip install --upgrade pip
+
+          pip install -r requirements.txt
+
+
+      # -----------------------------------------
+      # Install Chromium
+      # -----------------------------------------
+
+      - name: Install Playwright Chromium
+
+        run: |
+
+          python -m playwright install chromium
+
+          python -m playwright install-deps chromium
+
+
+      # -----------------------------------------
+      # Restore Meesho session
+      # -----------------------------------------
+
+      - name: Restore Meesho session
+
+        env:
+
+          SESSION_B64: ${{ secrets.MEESHO_SESSION_B64 }}
+
+        run: |
+
+          echo "$SESSION_B64" | base64 --decode > meesho_session.json
+
+
+      # -----------------------------------------
+      # Run Meesho report
+      # -----------------------------------------
+
+      - name: Run Meesho report
+
+        env:
+
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+        run: |
+
+          python meesho_daily_report.py
+
+
+      # -----------------------------------------
+      # Delete session after run
+      # -----------------------------------------
+
+      - name: Remove session
+
+        if: always()
+
+        run: |
+
+          rm -f meesho_session.json
