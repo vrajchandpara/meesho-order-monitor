@@ -43,10 +43,10 @@ STATUS_MAP = {
 
 
 counts = {
-    "pending": 0,
-    "ready-to-ship": 0,
-    "shipped": 0,
-    "cancelled": 0
+    "pending": None,
+    "ready-to-ship": None,
+    "shipped": None,
+    "cancelled": None
 }
 
 
@@ -392,13 +392,16 @@ with sync_playwright() as p:
                 f"❌ Meesho rejected "
                 f"{order_type} request."
             )
-
+        
+            print(
+                f"HTTP Status: {http_status}"
+            )
+        
             print(
                 response_text[:1000]
             )
-
-            return 0
-
+        
+            return None
 
         # -------------------------------------------------
         # Parse response
